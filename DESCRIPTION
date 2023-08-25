@@ -1,0 +1,18 @@
+Package: MultiLayerNetwork
+Type: Package
+Title: Multi-Layer Network Analysis
+Version: 0.1.0
+Author: Luis Iberico
+Maintainer: Luis Iberico <ibl@bu.edu>
+Description: Applies the multi-layer network analysis from Guan, Cheng, Koo
+Encoding: UTF-8
+LazyData: true
+Imports:
+    purrr,
+    tidyr,
+    ggplot2,
+    dplyr,
+    ppcor,
+    WGCNA,
+    cluster
+RoxygenNote: 7.2.3

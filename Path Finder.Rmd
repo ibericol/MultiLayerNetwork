@@ -1,0 +1,576 @@
+---
+title: "Untitled"
+author: "Luis Iberico"
+date: "2023-07-13"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Data Generator
+
+We simulate a random data frame with 50 variables by taking random draws from a multivariate normal distribution.
+
+```{r}
+set.seed(42)
+# A random covariance matrix
+COV <- matrix(abs(rnorm(n=50^2)),50,50)
+COV <- t(COV) %*% COV
+require(MASS)
+
+data <- mvrnorm(n=1000,mu=rep(0,50),Sigma=COV)
+colnames(data) <- paste0("var_",c(1:50))
+```
+
+## 1. Networks without groupping
+
+* In this example we run the multi layer network analysis on a data frame and take all the defaults.
+* The package will estimate a correlation matrix and then calculate the Lower and Upper Level Networks.
+* By default, the clustering algorith will be Hierarchical Clustering.
+
+```{r }
+require(tidyverse)
+require(ppcor)
+require(WGCNA)
+require(cluster)
+require(MultiLayerNetwork)
+#detach("package:MultiLayerNetwork", unload = TRUE)
+basic_networks <- multi_network(DF=data)
+```
+
+## 6. 
+
+```{r}
+df <- read_csv("/Users/luisiberico/Documents/PhD/BIL/APOE_paper_test_data.csv")
+
+```
+
+
+
+```{r}
+data = df%>%filter(APOE4==2)%>%dplyr::select(-c(studyid,Age_8yr,Sex,EDUC3,APOE4))
+demo = df%>%filter(APOE4==2)%>%dplyr::select(c(Age_8yr,Sex))
+
+networks_with_groups_and_clusters <- multi_network(DF=DF_2,
+                                     ClType="HC",
+                                     Z=Z_2%>%dplyr::select(Age_8yr,Sex),
+                                     Groups = GroupIndx_df$GroupName,
+                                     ClGroup = "FA")
+
+
+W <- networks_with_groups_and_clusters$ULN
+
+
+
+table(df$APOE4)
+
+```
+
+```{r}
+data
+
+```
+
+## Cleanning the data
+
+```{r}
+W <- networks_with_groups_and_clusters$ULN
+
+networks_threshold <- function(W, p_threshold=0.5, q_threshold=NULL){
+  
+  # Break if p and 1 are both specified
+    if (p_threshold!=0.5&!is.null(q_threshold)) {
+    warning("q_threshold overrides p_threshold")
+  }
+  
+  # Get the quantile if its not specified
+  if(is.null(q_threshold)){q_threshold <- quantile(W[W<1],p_threshold)}
+  
+  # Drop lower values
+  W[W<q_threshold] <- 0
+  return(W)
+}
+
+
+networks_threshold(W=W,p_threshold=0.25)
+networks_threshold(ULN,p_threshold=0.3,q_threshold=0.3)
+
+W = networks_threshold(W,p=0.75)
+```
+
+
+```{r}
+network_to_distance <- function(W,transform="Inv"){
+  # check if transform is correctly specified
+  if(!transform%in%c("Inv","Log")){stop("Transform must be Inv of Log.")}
+  
+  # Inverse transformation
+  if(transform=="Inv"){W_transformed = 1/W}
+  
+  # Log transformation
+  if(transform=="Log"){W_transformed = -log10(W)}
+  
+  # Diagonal to 0
+  W_transformed <- W_transformed-diag(diag(as.matrix(W_transformed)))
+  return(W_transformed)
+}
+
+
+```
+
+
+
+
+```{r}
+# Function to find the shortest path using Floyd-Warshall algorithm
+floyd_warshall <- function(Distance) {
+  # Number of vertices in the graph
+  V <- nrow(Distance)
+  
+  # Initialize the distance and next matrices
+  min_Distance <- Distance
+  Next <- matrix(0, nrow = V, ncol = V)
+  
+  # Find the shortest path for all pairs of vertices
+  for (k in 1:V) {
+    for (i in 1:V) {
+      for (j in 1:V) {
+        if (min_Distance[i, k] + min_Distance[k, j] < min_Distance[i, j]) {
+          min_Distance[i, j] <- min_Distance[i, k] + min_Distance[k, j]
+          Next[i, j] <- k
+        }
+      }
+    }
+  }
+  
+  # Return the distance and next matrices
+  return(list(min_Distance = min_Distance, Next = Next))
+}
+```
+
+```{r}
+# Function to reconstruct the shortest path between two vertices
+reconstruct_path <- function(Next, start, end) {
+  initial_hop <- Next[start, end]
+  if(initial_hop!=0){
+  hop = initial_hop
+  hops <- c(hop)
+  # Hops To the end
+  while (hop != 0) {
+    new_hop <- Next[hop, end]
+    if(new_hop!=0){
+    hops <- c(hops,new_hop)
+    }
+    hop <- new_hop
+  }
+   # Hops from the start
+  hop <- hops[1]
+  while (hop != 0) {
+    new_hop <- Next[start, hop]
+    if(new_hop!=0){
+    hops <- c(new_hop, hops)
+    }
+    hop <- new_hop
+  }
+  path <- c(start,hops,end)
+  path <- paste(path, collapse = ", ")
+  }
+  if(initial_hop==0){
+    path <- c(start,end)
+    path <- paste(path, collapse = ", ")
+    }
+  return(paste0("[",path,"]"))
+}
+
+```
+
+
+```{r}
+path_finder <- function(Next){
+  V = nrow(Next)
+  Path_Mat = matrix(NA,V,V)
+  for(i in 1:V){
+    for(j in 1:V){
+      if(j!=i){
+      Path_Mat[i,j] = reconstruct_path(Next,start=i,end=j)
+        }
+      if(j==i){
+        Path_Mat[i,j] = 0
+        }
+    }
+  }
+  return(Path_Mat)
+}
+
+
+#write.csv(paths,"/Users/luisiberico/Documents/PhD/BIL/Paths ULN APOE4 Carriers.csv")
+
+
+```
+
+```{r}
+split_path <- function(path){
+  numbers <- str_extract_all(path, "\\d+")[[1]]
+  n <- length(numbers)
+  pairs <- paste(numbers[c(1:(n-1))],numbers[2:n], sep=",")
+  pairs <- paste0("[",pairs,"]")
+  
+  return(pairs)
+}
+```
+
+```{r}
+key_paths <- function(paths){
+  path_pairs_vector <- unlist(map(paths,split_path))
+
+  pairs_with_NA <- grep(pattern="NA", x=path_pairs_vector)
+  pairs_with_0_start <- grep(pattern="\\[0", x=path_pairs_vector)
+  pairs_with_0_end <- grep(pattern=",0]", x=path_pairs_vector)
+  pairs_with_0_or_NA <- unique(c(pairs_with_NA,pairs_with_0_end,pairs_with_0_start))
+  if(length(pairs_with_0_or_NA)>0){
+  path_pairs_vector <- path_pairs_vector[-pairs_with_0_or_NA]
+  }
+  key_paths <- as.data.frame(table(path_pairs_vector))
+  colnames(key_paths) <- c("key_path","N")
+  
+  sorted_indices <- order(key_paths$N)
+  key_paths <- key_paths[sorted_indices,]
+  
+  key_paths_plot <- 
+  ggplot(key_paths)+
+    geom_col(aes(y = reorder(key_path, -N),x=N,fill=N),alpha=.7)+
+    labs(y="",x="",fill="")+
+    theme_minimal()+
+    scale_fill_gradient(low = "black", high = "darkred")
+  
+  return(list(key_paths=key_paths,key_paths_plot=key_paths_plot))
+
+}
+
+```
+
+
+
+```{r}
+W <- read_csv("/Users/luisiberico/Documents/PhD/BIL/YI TEST PATH.csv")
+Networks_Paths <- function(W,transform="Inv"){
+  Distance <- network_to_distance(W,"Inv")
+  FW_output <- floyd_warshall(Distance)
+  Next = FW_output$Next
+  min_Distance = FW_output$min_Distance
+  Paths <- path_finder(Next)
+  return(list(Distance=Distance,
+              min_Distance=min_Distance,
+              Next=Next,
+              Paths=Paths))
+
+}
+test=
+Networks_Paths(W)
+
+D = network_to_distance(W,"Inv")
+Next = floyd_warshall(D)$Next
+min_D = floyd_warshall(D)$min_Distance
+paths <- path_finder(Next)
+key_paths(path=test$Paths[1:5,10])
+
+qew <- 
+networks_paths(W)
+
+key_paths(qew$Paths[1:5,10])
+
+
+map(paths[1:5,10],split_path)
+```
+
+```{r}
+subser_fun <- function(Paths,subset="upper"){
+  if(subset=="upper"){Paths[!upper.tri(Paths)] <-  "[0]"}
+  if(subset=="lower"){Paths[!lower.tri(Paths)] <-  "[0]"}
+  return(Paths)
+}
+Paths <- qew$Paths
+Paths <- subser_fun(Paths)
+key_paths <- key_paths(Paths)$key_paths%>%
+             mutate(key_path = as.character(key_path),
+                    from = map(.f=gregexpr,.x=key_path,pattern=","))
+
+
+
+numbers <- as.numeric(regmatches(key_paths, gregexpr("\\d+", key_paths))[[1]])
+
+first_number <- as.numeric(regmatches("[10,6]", regexpr("\\d+", "[10,6]")))
+
+```
+
+```{r}
+path <- "[1, 5, 10, 7]"
+
+### THIS WILL BE A NEW FUN
+# DROP DIAGONAL ELEMENTS
+table(unlist(map(paths[1:5,10],split_path)))%>%as.data.frame()%>%ggplot()+geom_col(aes(y=Var1,x=Freq))
+
+as.vector(paths[1:10,1:10])
+split_path(as.vector(paths[1:10,1:10]))
+
+all_spluts <- 
+c(split_path(paths[1,10]),
+  split_path(paths[2,10]),
+  split_path(paths[3,10]),
+  split_path(paths[4,10]),
+  split_path(paths[5,10]))
+
+table(all_spluts)%>%as.data.frame()%>%ggplot()+geom_col(aes(x=all_spluts,y=Freq))
+```
+
+
+
+
+
+```{r}
+
+library(MultiLayerNetwork)
+
+
+DF <- read_csv("/Users/luisiberico/Downloads/Test_data_copy.csv")
+
+
+GroupIndx_df <- data.frame(GroupIndx=c(rep(1,16),2,2,3,3,3,4,4,4,4,5,5,6,6,7,7,rep(8,10)),
+                           GroupName=c(rep("Diet_bl",16),
+                                       rep("BVit_bl",2),rep("FA_bl",3),
+                                       rep("Lipids_1",4),rep("Other_1",2),
+                                       rep("BImmune_mri",2),
+                                       rep("Clinical_mri",2),rep("WM_mri",10)),
+                           VarName=colnames(DF_1))
+
+
+DF_1 <- DF%>%filter(APOE4==0)%>%dplyr::select(-c(subject_id,Age_2,Sex,APOE4))
+DF_2 <- DF%>%filter(APOE4==1)%>%dplyr::select(-c(subject_id,Age_2,Sex,APOE4))
+Z_1 <- DF%>%filter(APOE4==0)%>%dplyr::select(c(subject_id,Age_2,Sex,APOE4))
+Z_2 <- DF%>%filter(APOE4==1)%>%dplyr::select(c(subject_id,Age_2,Sex,APOE4))
+
+
+colSums(is.na(DF_1))/nrow(DF_1)
+colSums(is.na(Z_1))/nrow(Z_1)
+
+
+mat_partial_cor_fun(DF=DF_1,Z=Z_1[,c("Age_2","Sex")],cor_method = "pearson")
+
+X = DF_1$`Total Triglycerides_1`; Y = DF_1$`Total Cholesterol_1`
+  na_ind <- rowSums(is.na(cbind(X,Y,Z_1))) != 0
+  X_notNA <- X[!na_ind]
+  Y_notNA <- Y[!na_ind]
+  Z_notNA <- Z[!na_ind,]
+
+
+ppcor::pcor.test(X_notNA, Y_notNA, Z_notNA, method = cor_method)
+
+
+partial_cor_fun(x_varname = , y_varname = , Z = , DF = , cor_method = "pearson")
+```
+
+```{r}
+mat_partial_cor_fun <- function(DF=DF_1,Z=Z_1[,c("Age_2","Sex")],cor_method){
+
+  # Create data frame with variable names
+  PCor_mat <- expand.grid(x_varname=colnames(DF),y_varname=colnames(DF))
+
+  # Map PCor
+  PCor_mat$PCor <- purrr::map2(.x=PCor_mat$x_varname,.y=PCor_mat$y_varname,
+                        .f=partial_cor_fun,Z=Z,DF=DF,
+                        cor_method=cor_method)
+
+  # Get rho and p. values
+  PCor_mat$rho <- purrr::map_dbl(.x=PCor_mat$PCor,.f="rho")
+  PCor_mat$pval <- purrr::map_dbl(.x=PCor_mat$PCor,.f="pval")
+
+  # Get the Rho Matrix
+  Rho <- tidyr::pivot_wider(data=PCor_mat[,c("x_varname","y_varname","rho")],
+                     names_from=y_varname,values_from=rho)
+  Rho <- as.matrix(Rho[, -1])  # Remove the Xindx column
+  rownames(Rho) <- colnames(Rho)
+
+  # Get the P. Values Matrix
+  PVal <- tidyr::pivot_wider(data=PCor_mat[,c("x_varname","y_varname","pval")],
+                      names_from=y_varname,values_from=pval)
+  PVal <- as.matrix(PVal[, -1])  # Remove the Xindx column
+  rownames(PVal) <- colnames(PVal)
+
+  # Return output
+  OutList <- list(Rho=Rho,PVal=PVal)
+  return(OutList)
+}
+require(MultiLayerNetwork)
+MultiLayerNetwork::partial_cor_fun
+```
+
+
+
+```{r}
+partial_cor_fun <- function(x_varname,
+                            y_varname,
+                            Z,DF,cor_method){
+
+  # Get X and Y variables with the index or variable names
+  X <- as.matrix(DF[,x_varname])
+  Y <- as.matrix(DF[,y_varname])
+
+  # Drop rows with any NA because pcor.test does not allow missing values
+  na_ind <- rowSums(is.na(cbind(X,Y,Z))) != 0
+  X_notNA <- X[!na_ind]
+  Y_notNA <- Y[!na_ind]
+  Z_notNA <- Z[!na_ind,]
+
+  if(length(X_notNA)==0){stop("You have pairs of variables with full missing values.")}
+
+  # Test for equal variable
+  if (identical(X_notNA, Y_notNA)) {
+    rho <- 1
+    pval <- 0
+  } else {
+
+    # Estimate the partial correlation if it's not the same variable
+    PcorTestOutput <- ppcor::pcor.test(X_notNA, Y_notNA, Z_notNA, method = cor_method)
+    rho <- PcorTestOutput$estimate
+    pval <- PcorTestOutput$p.value
+  }
+
+  # Build output data frame
+  OutPut <- data.frame(rho=rho,pval=pval)
+  return(OutPut)
+}
+
+
+```
+
+
+##### Bayes correl with simulations
+
+```{r}
+set.seed(42)
+# A random covariance matrix
+COV <- matrix(abs(rnorm(n=50^2)),50,50)
+COV <- t(COV) %*% COV
+require(MASS)
+
+data <- mvrnorm(n=1000,mu=rep(0,50),Sigma=COV)
+colnames(data) <- paste0("var_",c(1:50))
+```
+
+```{r}
+stdev <- solve(diag(sqrt(diag(COV))))
+Rho <- stdev%*%COV%*%stdev
+
+data%>%head(5)
+lm(data[,1]~data[,2])
+Z_data <- scale(data)
+
+lm(Z_data[,1]~Z_data[,2])
+cor(Z_data[,1],Z_data[,2])
+cor(data[,1],data[,2])
+
+```
+
+  matrix[P,P] identity; //Identity for scaling matrix
+  identity = diag_matrix(rep_vector(1.0,P)); 
+  COV ~ inv_wishart(P, identity);
+  
+  MU ~ normal(0,5);
+  COV ~ normal(0,5);
+
+
+```{r}
+#require(rstan)
+model_1 <- "
+data {
+  int<lower=1> N;
+  int<lower=1> P;
+  matrix[N,P] Y;
+}
+parameters {
+  vector[P] MU;
+  cov_matrix[P]  COV;
+  
+}
+model {
+
+  for(i in 1:N){
+    Y[i] ~ multi_normal(MU, COV);
+  }
+}"
+
+```
+
+
+
+
+```{r}
+fit_model_1 <- stan(model_code = model_1,
+                data = list(N = nrow(data), 
+                            P=ncol(data), 
+                            Y=data),
+                iter=1000,
+                chains = 4,
+                cores=4,
+                init=0)
+```
+
+
+```{r}
+list_of_draws <- rstan::extract(fit_model_1)
+
+list_of_draws$COV[1,,]
+
+
+mean(list_of_draws$COV[,5,3])/sqrt(mean(list_of_draws$COV[,5,5])*mean(list_of_draws$COV[,3,3]))
+Rho[2,3]
+dim(list_of_draws$COV)
+
+
+```
+
+
+##### Bayes correl with real data
+
+
+```{r}
+#rm(list = ls())
+#path <- "/projectnb/bil/Luis Iberico"
+path <- "/Users/luisiberico/Documents/PhD/BIL"
+setwd(path)
+DF <- read.csv("APOE_paper_test_data.csv")
+#summary(lm(Age_8yr~factor(APOE4),DF))
+#summary(lm(hei2005_exc_oil~factor(APOE4),DF))
+#summary(lm(hei2005~factor(APOE4),DF))
+#summary(lm(L_IFOF~factor(APOE4),DF))
+#summary(lm(R_IFOF~factor(APOE4),DF))
+
+DF_1 <- DF%>%filter(APOE4==1)%>%dplyr::select(-c(studyid,Age_8yr,Sex,EDUC3,APOE4))
+DF_2 <- DF%>%filter(APOE4==2)%>%dplyr::select(-c(studyid,Age_8yr,Sex,EDUC3,APOE4))
+
+Z_1 <- DF%>%filter(APOE4==1)%>%dplyr::select(c(studyid,Age_8yr,Sex,EDUC3,APOE4))
+Z_2 <- DF%>%filter(APOE4==2)%>%dplyr::select(c(studyid,Age_8yr,Sex,EDUC3,APOE4))
+
+GroupName=c(rep("HEI",2),rep("FA",26),rep("BVit",2),rep("Other",5),
+            rep("BImmune",3),rep("BLipids",4),
+            rep("Clinical",2),rep("WM",6))
+
+```
+
+```{r}
+#require(rstan)
+
+
+
+
+
+```
+
+
+
+
+
+
+
